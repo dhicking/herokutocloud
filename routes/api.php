@@ -6,7 +6,7 @@ use App\Http\Controllers\Api\HerokuAppsController;
 use App\Http\Controllers\Api\ImportController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware(['auth:sanctum'])->group(function () {
+Route::middleware(['auth'])->group(function () {
     Route::get('connections', ConnectionsController::class)->name('api.connections');
 
     Route::get('heroku/apps', [HerokuAppsController::class, 'index'])->name('api.heroku.apps');
