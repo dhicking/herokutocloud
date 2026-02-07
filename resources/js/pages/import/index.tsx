@@ -98,10 +98,16 @@ const REGION_MAP: Record<string, string> = {
     eu: 'eu-west-2 (London)',
 };
 
+interface Connections {
+    heroku: boolean;
+    cloud: boolean;
+}
+
 export default function ImportWizard() {
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [connections, setConnections] = useState<Connections | null>(null);
 
     // Step 1
     const [githubRepo, setGithubRepo] = useState('');
@@ -113,6 +119,37 @@ export default function ImportWizard() {
 
     // Step 4
     const [importRecord, setImportRecord] = useState<ImportRecord | null>(null);
+
+    useEffect(() => {
+        axios
+            .get('/api/connections')
+            .then(({ data }) => setConnections(data))
+            .catch(() => setConnections({ heroku: false, cloud: false }));
+    }, []);
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const importId = params.get('import');
+        if (!importId) return;
+
+        let cancelled = false;
+        axios
+            .get(`/api/imports/${importId}`)
+            .then(({ data }) => {
+                if (!cancelled) {
+                    setImportRecord(data);
+                    setStep(4);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    window.history.replaceState(null, '', '/import');
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const fetchApps = useCallback(async () => {
         setLoading(true);
@@ -154,6 +191,7 @@ export default function ImportWizard() {
             });
             setImportRecord(data);
             setStep(4);
+            window.history.replaceState(null, '', `/import?import=${data.id}`);
         } catch (err: unknown) {
             const message =
                 err instanceof Error ? err.message : 'Failed to start import.';
@@ -237,6 +275,35 @@ export default function ImportWizard() {
                     description="Migrate your Heroku app to Laravel Cloud"
                 />
 
+                {connections === null ? (
+                    <div className="flex items-center justify-center py-12">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                ) : !connections.cloud ? (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Cloud className="h-5 w-5" />
+                                Connect Laravel Cloud first
+                            </CardTitle>
+                            <CardDescription>
+                                We need your Laravel Cloud API token to create
+                                the app, look up repositories, and run the
+                                migration. Add it in Settings → Integrations,
+                                then return here.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <Button asChild>
+                                <a href="/settings/integrations">
+                                    Open Integrations
+                                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                                </a>
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <>
                 {/* Step indicator */}
                 <div className="mb-8 flex items-center gap-2">
                     {[1, 2, 3, 4].map((s) => (
@@ -847,6 +914,8 @@ export default function ImportWizard() {
                             </div>
                         )}
                     </div>
+                )}
+                    </>
                 )}
             </div>
         </AppLayout>

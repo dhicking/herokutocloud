@@ -31,6 +31,20 @@ test('import can be created', function () {
     Queue::assertPushed(ImportPhase1Job::class);
 });
 
+test('import store returns 403 when user has no cloud token', function () {
+    $user = User::factory()->create();
+    HerokuToken::factory()->for($user)->create();
+
+    $response = $this->actingAs($user)->postJson(route('api.imports.store'), [
+        'heroku_app_id' => 'test-app-id',
+        'heroku_app_name' => 'test-app',
+        'github_repository' => 'org/repo',
+    ]);
+
+    $response->assertForbidden();
+    $response->assertJsonFragment(['message' => 'Laravel Cloud API token is required. Add it in Settings → Integrations.']);
+});
+
 test('import requires valid github repository', function () {
     $user = User::factory()->create();
 

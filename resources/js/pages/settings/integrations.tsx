@@ -78,7 +78,7 @@ export default function Integrations({
                     <Heading
                         variant="small"
                         title="Service connections"
-                        description="Connect your Heroku and Laravel Cloud accounts to enable app migration"
+                        description="Connect Laravel Cloud first (API token), then Heroku, to enable app migration"
                     />
 
                     {status === 'heroku-connected' && (
@@ -95,47 +95,6 @@ export default function Integrations({
 
                     <Card>
                         <CardHeader>
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-1">
-                                    <CardTitle className="flex items-center gap-2">
-                                        Heroku
-                                        {herokuConnected ? (
-                                            <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                        ) : (
-                                            <XCircle className="h-4 w-4 text-muted-foreground" />
-                                        )}
-                                    </CardTitle>
-                                    <CardDescription>
-                                        {herokuConnected
-                                            ? 'Your Heroku account is connected. We can read your apps, config, and add-ons.'
-                                            : 'Connect your Heroku account via OAuth to import your apps.'}
-                                    </CardDescription>
-                                </div>
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            {herokuConnected ? (
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={disconnectHeroku}
-                                >
-                                    <Unplug className="mr-1.5 h-3.5 w-3.5" />
-                                    Disconnect
-                                </Button>
-                            ) : (
-                                <Button asChild size="sm">
-                                    <a href="/heroku/redirect">
-                                        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                                        Connect Heroku
-                                    </a>
-                                </Button>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader>
                             <div className="space-y-1">
                                 <CardTitle className="flex items-center gap-2">
                                     Laravel Cloud
@@ -147,8 +106,8 @@ export default function Integrations({
                                 </CardTitle>
                                 <CardDescription>
                                     {cloudConnected
-                                        ? `Connected${cloudOrganizationName ? ` to ${cloudOrganizationName}` : ''}. Your API token is stored securely.`
-                                        : 'Enter your Laravel Cloud API token to create and manage Cloud resources.'}
+                                        ? `Connected${cloudOrganizationName ? ` to ${cloudOrganizationName}` : ''}. We use this to create apps, look up repos, and manage resources.`
+                                        : 'Add your API token first. We use it to create Cloud apps, look up repositories, and run the migration.'}
                                 </CardDescription>
                             </div>
                         </CardHeader>
@@ -230,6 +189,47 @@ export default function Integrations({
                                         Save token
                                     </Button>
                                 </form>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-1">
+                                    <CardTitle className="flex items-center gap-2">
+                                        Heroku
+                                        {herokuConnected ? (
+                                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                                        ) : (
+                                            <XCircle className="h-4 w-4 text-muted-foreground" />
+                                        )}
+                                    </CardTitle>
+                                    <CardDescription>
+                                        {herokuConnected
+                                            ? 'Your Heroku account is connected. We can read your apps, config, and add-ons.'
+                                            : 'Connect Heroku via OAuth so we can read the app you want to migrate.'}
+                                    </CardDescription>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            {herokuConnected ? (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={disconnectHeroku}
+                                >
+                                    <Unplug className="mr-1.5 h-3.5 w-3.5" />
+                                    Disconnect
+                                </Button>
+                            ) : (
+                                <Button asChild size="sm">
+                                    <a href="/heroku/redirect">
+                                        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                                        Connect Heroku
+                                    </a>
+                                </Button>
                             )}
                         </CardContent>
                     </Card>

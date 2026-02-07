@@ -21,6 +21,13 @@ class ImportController extends Controller
 
     public function store(StoreImportRequest $request): JsonResponse
     {
+        if (! $request->user()->hasCloudConnected()) {
+            return response()->json(
+                ['message' => 'Laravel Cloud API token is required. Add it in Settings → Integrations.'],
+                403
+            );
+        }
+
         $import = $request->user()->imports()->create($request->validated());
 
         ImportPhase1Job::dispatch($import);
