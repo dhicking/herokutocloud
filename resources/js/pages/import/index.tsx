@@ -163,6 +163,26 @@ export default function ImportWizard() {
         }
     }, [appDetails, githubRepo]);
 
+    const startPhase2 = useCallback(async () => {
+        if (!importRecord) return;
+        setLoading(true);
+        setError(null);
+        try {
+            const { data } = await axios.post(
+                `/api/imports/${importRecord.id}/phase2`,
+            );
+            setImportRecord(data);
+        } catch (err: unknown) {
+            const message =
+                err instanceof Error
+                    ? err.message
+                    : 'Failed to start Phase 2.';
+            setError(message);
+        } finally {
+            setLoading(false);
+        }
+    }, [importRecord]);
+
     // Poll import status
     useEffect(() => {
         if (!importRecord || step !== 4) return;
@@ -247,7 +267,7 @@ export default function ImportWizard() {
                         {step === 1 && 'GitHub Repository'}
                         {step === 2 && 'Select Heroku App'}
                         {step === 3 && 'Review & Deploy'}
-                        {step === 4 && 'Deploying'}
+                        {step === 4 && 'Deploy & Migrate'}
                     </span>
                 </div>
 
@@ -574,37 +594,31 @@ export default function ImportWizard() {
                     </div>
                 )}
 
-                {/* Step 4: Phase 1 Progress */}
+                {/* Step 4: Progress */}
                 {step === 4 && importRecord && (
                     <div className="space-y-6">
+                        {/* Phase 1 card */}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2">
-                                    {importRecord.status === 'failed' ? (
+                                    {importRecord.status === 'failed' &&
+                                    !importRecord.phase2_log?.length ? (
                                         <XCircle className="h-5 w-5 text-red-500" />
-                                    ) : importRecord.status ===
-                                      'phase1_done' ? (
+                                    ) : [
+                                          'phase1_done',
+                                          'phase2_running',
+                                          'phase2_done',
+                                      ].includes(importRecord.status) ? (
                                         <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                    ) : importRecord.status === 'failed' ? (
+                                        <XCircle className="h-5 w-5 text-red-500" />
                                     ) : (
                                         <Loader2 className="h-5 w-5 animate-spin" />
                                     )}
-                                    {importRecord.status === 'failed'
-                                        ? 'Import Failed'
-                                        : importRecord.status === 'phase1_done'
-                                          ? 'Phase 1 Complete'
-                                          : 'Deploying to Laravel Cloud...'}
+                                    Phase 1: Deploy to Laravel Cloud
                                 </CardTitle>
-                                {importRecord.status === 'phase1_done' && (
-                                    <CardDescription>
-                                        Your app is now running on Laravel Cloud
-                                        using your Heroku database. You can
-                                        optionally migrate the database in Phase
-                                        2.
-                                    </CardDescription>
-                                )}
                             </CardHeader>
                             <CardContent>
-                                {/* Log output */}
                                 {importRecord.phase1_log &&
                                     importRecord.phase1_log.length > 0 && (
                                         <div className="rounded-lg border bg-neutral-950 p-4">
@@ -635,25 +649,162 @@ export default function ImportWizard() {
                                             </div>
                                         </div>
                                     )}
-
-                                {importRecord.error_message && (
-                                    <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
-                                        {importRecord.error_message}
-                                    </div>
-                                )}
                             </CardContent>
                         </Card>
 
+                        {/* Phase 2 section */}
                         {importRecord.status === 'phase1_done' && (
-                            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800/30 dark:bg-blue-950/20">
-                                <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                                    What's next?
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Database className="h-5 w-5" />
+                                        Phase 2: Migrate Database
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Provision Serverless Postgres on Laravel
+                                        Cloud and migrate your Heroku database.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
+                                        <div className="flex items-start gap-2">
+                                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                            <div>
+                                                <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                                    Downtime required
+                                                </h4>
+                                                <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                                                    Any new data written to your
+                                                    Heroku app during this
+                                                    migration will not be moved
+                                                    over. Consider putting your
+                                                    Heroku app in maintenance
+                                                    mode or read-only before
+                                                    proceeding.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <Button
+                                        onClick={startPhase2}
+                                        disabled={loading}
+                                    >
+                                        {loading ? (
+                                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <Database className="mr-1.5 h-4 w-4" />
+                                        )}
+                                        Start Phase 2
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Phase 2 progress */}
+                        {['phase2_running', 'phase2_done'].includes(
+                            importRecord.status,
+                        ) && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        {importRecord.status ===
+                                        'phase2_done' ? (
+                                            <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                        ) : (
+                                            <Loader2 className="h-5 w-5 animate-spin" />
+                                        )}
+                                        Phase 2: Migrate Database
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    {importRecord.phase2_log &&
+                                        importRecord.phase2_log.length > 0 && (
+                                            <div className="rounded-lg border bg-neutral-950 p-4">
+                                                <div className="space-y-1 font-mono text-xs text-neutral-300">
+                                                    {importRecord.phase2_log.map(
+                                                        (entry, i) => (
+                                                            <div
+                                                                key={i}
+                                                                className={
+                                                                    entry.includes(
+                                                                        'failed',
+                                                                    )
+                                                                        ? 'text-red-400'
+                                                                        : entry.includes(
+                                                                                'complete',
+                                                                              ) ||
+                                                                            entry.includes(
+                                                                                'successfully',
+                                                                            )
+                                                                          ? 'text-green-400'
+                                                                          : ''
+                                                                }
+                                                            >
+                                                                {entry}
+                                                            </div>
+                                                        ),
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Phase 2 failed */}
+                        {importRecord.status === 'failed' &&
+                            importRecord.phase2_log &&
+                            importRecord.phase2_log.length > 0 && (
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle className="flex items-center gap-2">
+                                            <XCircle className="h-5 w-5 text-red-500" />
+                                            Phase 2 Failed
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="rounded-lg border bg-neutral-950 p-4">
+                                            <div className="space-y-1 font-mono text-xs text-neutral-300">
+                                                {importRecord.phase2_log.map(
+                                                    (entry, i) => (
+                                                        <div
+                                                            key={i}
+                                                            className={
+                                                                entry.includes(
+                                                                    'failed',
+                                                                )
+                                                                    ? 'text-red-400'
+                                                                    : ''
+                                                            }
+                                                        >
+                                                            {entry}
+                                                        </div>
+                                                    ),
+                                                )}
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+
+                        {/* Error message */}
+                        {importRecord.error_message && (
+                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
+                                {importRecord.error_message}
+                            </div>
+                        )}
+
+                        {/* Completion message */}
+                        {importRecord.status === 'phase2_done' && (
+                            <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800/30 dark:bg-green-950/20">
+                                <h4 className="text-sm font-medium text-green-900 dark:text-green-200">
+                                    Migration complete
                                 </h4>
-                                <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
-                                    Phase 2 (optional) migrates your Heroku
-                                    Postgres database to Laravel Cloud's
-                                    Serverless Postgres. This requires a brief
-                                    maintenance window.
+                                <p className="mt-1 text-sm text-green-700 dark:text-green-300">
+                                    Your app is fully migrated to Laravel Cloud
+                                    with its own Serverless Postgres database.
+                                    You can now safely decommission your Heroku
+                                    app.
                                 </p>
                             </div>
                         )}

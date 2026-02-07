@@ -18,4 +18,5 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('imports', [ImportController::class, 'index'])->name('api.imports.index');
     Route::post('imports', [ImportController::class, 'store'])->name('api.imports.store');
     Route::get('imports/{import}', [ImportController::class, 'show'])->name('api.imports.show');
+    Route::post('imports/{import}/phase2', [ImportController::class, 'phase2'])->name('api.imports.phase2');
 });
