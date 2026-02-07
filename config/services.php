@@ -35,4 +35,17 @@ return [
         ],
     ],
 
+    'heroku' => [
+        'client_id' => env('HEROKU_CLIENT_ID'),
+        'client_secret' => env('HEROKU_CLIENT_SECRET'),
+        'redirect_uri' => env('HEROKU_REDIRECT_URI', env('APP_URL').'/heroku/callback'),
+        'api_url' => env('HEROKU_API_URL', 'https://api.heroku.com'),
+        'data_api_url' => env('HEROKU_DATA_API_URL', 'https://api.data.heroku.com'),
+        'oauth_url' => env('HEROKU_OAUTH_URL', 'https://id.heroku.com'),
+    ],
+
+    'laravel_cloud' => [
+        'api_url' => env('LARAVEL_CLOUD_API_URL', 'https://cloud.laravel.com/api'),
+    ],
+
 ];

@@ -4,6 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Fortify\TwoFactorAuthenticatable;
@@ -48,5 +49,25 @@ class User extends Authenticatable
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
         ];
+    }
+
+    public function herokuToken(): HasOne
+    {
+        return $this->hasOne(HerokuToken::class);
+    }
+
+    public function cloudToken(): HasOne
+    {
+        return $this->hasOne(CloudToken::class);
+    }
+
+    public function hasHerokuConnected(): bool
+    {
+        return $this->herokuToken !== null;
+    }
+
+    public function hasCloudConnected(): bool
+    {
+        return $this->cloudToken !== null;
     }
 }
