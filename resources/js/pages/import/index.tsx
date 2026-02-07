@@ -628,7 +628,35 @@ export default function ImportWizard() {
                                     Phase 1: Deploy to Laravel Cloud
                                 </CardTitle>
                             </CardHeader>
-                            <CardContent>
+                            <CardContent className="space-y-4">
+                                {importRecord.status === 'pending' &&
+                                    (!importRecord.phase1_log ||
+                                        importRecord.phase1_log.length === 0) && (
+                                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
+                                            <div className="flex items-start gap-2">
+                                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                                <div>
+                                                    <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                                        Phase 1 is queued
+                                                    </h4>
+                                                    <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                                                        Nothing is happening
+                                                        because no queue worker
+                                                        is running. On Laravel
+                                                        Cloud: add a background
+                                                        process (e.g. in your
+                                                        app cluster) that runs{' '}
+                                                        <code className="rounded bg-amber-100 px-1 dark:bg-amber-900/40">
+                                                            php artisan
+                                                            queue:work
+                                                        </code>
+                                                        . Then Phase 1 will
+                                                        run automatically.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 {importRecord.phase1_log &&
                                     importRecord.phase1_log.length > 0 && (
                                         <div className="rounded-lg border bg-neutral-950 p-4">
