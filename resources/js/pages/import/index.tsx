@@ -273,9 +273,19 @@ export default function ImportWizard() {
 
                 {error && (
                     <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
-                        <div className="flex items-start gap-2">
-                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span>{error}</span>
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-start gap-2">
+                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                <span>{error}</span>
+                            </div>
+                            {error.includes('Heroku account') && (
+                                <a
+                                    href="/heroku/redirect"
+                                    className="inline-flex w-fit items-center rounded border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                                >
+                                    Connect Heroku account
+                                </a>
+                            )}
                         </div>
                     </div>
                 )}

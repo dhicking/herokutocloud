@@ -29,3 +29,21 @@ test('connections returns true when tokens exist', function () {
     $response->assertOk();
     $response->assertJson(['heroku' => true, 'cloud' => true]);
 });
+
+test('heroku apps index returns 403 when user has no heroku token', function () {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)->getJson(route('api.heroku.apps'));
+
+    $response->assertForbidden();
+    $response->assertJsonFragment(['message' => 'Heroku account is not connected. Connect it in Settings → Integrations.']);
+});
+
+test('heroku apps show returns 403 when user has no heroku token', function () {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)->getJson(route('api.heroku.apps.show', ['app' => 'some-app-id']));
+
+    $response->assertForbidden();
+    $response->assertJsonFragment(['message' => 'Heroku account is not connected. Connect it in Settings → Integrations.']);
+});

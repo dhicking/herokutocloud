@@ -11,14 +11,32 @@ class HerokuAppsController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $herokuApi = new HerokuApi($request->user()->herokuToken);
+        $token = $request->user()->herokuToken;
+
+        if (! $token) {
+            return response()->json(
+                ['message' => 'Heroku account is not connected. Connect it in Settings → Integrations.'],
+                403
+            );
+        }
+
+        $herokuApi = new HerokuApi($token);
 
         return response()->json($herokuApi->listApps());
     }
 
     public function show(Request $request, string $app): JsonResponse
     {
-        $herokuApi = new HerokuApi($request->user()->herokuToken);
+        $token = $request->user()->herokuToken;
+
+        if (! $token) {
+            return response()->json(
+                ['message' => 'Heroku account is not connected. Connect it in Settings → Integrations.'],
+                403
+            );
+        }
+
+        $herokuApi = new HerokuApi($token);
 
         $appData = $herokuApi->getApp($app);
         $configVars = $herokuApi->getConfigVars($app);
