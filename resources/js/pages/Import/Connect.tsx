@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 
 interface ConnectProps {
     herokuConnected: boolean;
+    herokuAccountEmail: string | null;
     cloudConnected: boolean;
     cloudOrganizationName: string | null;
     status?: string;
@@ -16,6 +17,7 @@ interface ConnectProps {
 
 export default function Connect({
     herokuConnected,
+    herokuAccountEmail,
     cloudConnected,
     cloudOrganizationName,
     status,
@@ -80,7 +82,9 @@ export default function Connect({
                                 </CardTitle>
                                 <CardDescription>
                                     {herokuConnected
-                                        ? 'Your Heroku account is connected.'
+                                        ? herokuAccountEmail
+                                            ? `Connected as ${herokuAccountEmail}`
+                                            : 'Your Heroku account is connected.'
                                         : 'Authorize with Heroku to read your apps and config.'}
                                 </CardDescription>
                             </CardHeader>
