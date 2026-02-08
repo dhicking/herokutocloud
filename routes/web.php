@@ -21,6 +21,7 @@ Route::get('dashboard', function () {
 
 Route::get('/auth/heroku', [HerokuAuthController::class, 'redirect'])->name('auth.heroku.redirect');
 Route::get('/auth/heroku/callback', [HerokuAuthController::class, 'callback'])->name('auth.heroku.callback');
+Route::get('/heroku/callback', [HerokuAuthController::class, 'callback']);
 Route::post('/auth/cloud/verify', [CloudAuthController::class, 'verify'])->name('auth.cloud.verify');
 
 Route::get('/import', [ImportController::class, 'connect'])->name('import.connect');
