@@ -46,7 +46,7 @@ class HerokuOAuthController extends Controller
             ],
         );
 
-        return redirect()->route('integrations.edit')->with('status', 'heroku-connected');
+        return redirect('/import')->with('status', 'heroku-connected');
     }
 
     public function destroy(Request $request): RedirectResponse

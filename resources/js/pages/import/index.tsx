@@ -8,8 +8,11 @@ import {
     Cloud,
     Container,
     Database,
+    ExternalLink,
     Globe,
+    Key,
     Loader2,
+    RefreshCw,
     Rocket,
     Server,
     XCircle,
@@ -98,6 +101,17 @@ const REGION_MAP: Record<string, string> = {
     eu: 'eu-west-2 (London)',
 };
 
+const STEP_LABELS: Record<number, string> = {
+    1: 'Cloud API',
+    2: 'Repository',
+    3: 'Heroku',
+    4: 'Select App',
+    5: 'Review',
+    6: 'Deploy',
+};
+
+const TOTAL_STEPS = 6;
+
 interface Connections {
     heroku: boolean;
     cloud: boolean;
@@ -108,25 +122,42 @@ export default function ImportWizard() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [connections, setConnections] = useState<Connections | null>(null);
+    const [connectionsLoading, setConnectionsLoading] = useState(true);
 
-    // Step 1
+    // Step 1 – Cloud API token
+    const [cloudApiToken, setCloudApiToken] = useState('');
+    const [cloudOrgName, setCloudOrgName] = useState('');
+    const [cloudTokenError, setCloudTokenError] = useState('');
+
+    // Step 2 – GitHub repo
     const [githubRepo, setGithubRepo] = useState('');
 
-    // Step 2
+    // Step 3 – Heroku connect
+    const [refreshingHeroku, setRefreshingHeroku] = useState(false);
+
+    // Step 4 – Select Heroku app
     const [herokuApps, setHerokuApps] = useState<HerokuApp[]>([]);
     const [selectedAppId, setSelectedAppId] = useState('');
     const [appDetails, setAppDetails] = useState<HerokuAppDetails | null>(null);
 
-    // Step 4
+    // Step 6 – Import progress
     const [importRecord, setImportRecord] = useState<ImportRecord | null>(null);
 
+    // Fetch connections on load
     useEffect(() => {
         axios
             .get('/api/connections')
-            .then(({ data }) => setConnections(data))
-            .catch(() => setConnections({ heroku: false, cloud: false }));
+            .then(({ data }) => {
+                setConnections(data);
+                if (data.cloud) {
+                    setStep(2);
+                }
+            })
+            .catch(() => setConnections({ heroku: false, cloud: false }))
+            .finally(() => setConnectionsLoading(false));
     }, []);
 
+    // URL restore for in-progress imports
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const importId = params.get('import');
@@ -138,7 +169,7 @@ export default function ImportWizard() {
             .then(({ data }) => {
                 if (!cancelled) {
                     setImportRecord(data);
-                    setStep(4);
+                    setStep(6);
                 }
             })
             .catch(() => {
@@ -150,6 +181,25 @@ export default function ImportWizard() {
             cancelled = true;
         };
     }, []);
+
+    // Poll connections on step 3 to detect Heroku OAuth return
+    useEffect(() => {
+        if (step !== 3 || connections?.heroku) return;
+
+        const interval = setInterval(async () => {
+            try {
+                const { data } = await axios.get('/api/connections');
+                setConnections(data);
+                if (data.heroku) {
+                    clearInterval(interval);
+                }
+            } catch {
+                // silently retry
+            }
+        }, 2000);
+
+        return () => clearInterval(interval);
+    }, [step, connections?.heroku]);
 
     const fetchApps = useCallback(async () => {
         setLoading(true);
@@ -190,7 +240,7 @@ export default function ImportWizard() {
                 github_repository: githubRepo,
             });
             setImportRecord(data);
-            setStep(4);
+            setStep(6);
             window.history.replaceState(null, '', `/import?import=${data.id}`);
         } catch (err: unknown) {
             const message =
@@ -223,7 +273,7 @@ export default function ImportWizard() {
 
     // Poll import status
     useEffect(() => {
-        if (!importRecord || step !== 4) return;
+        if (!importRecord || step !== 6) return;
 
         const terminal = ['phase1_done', 'phase2_done', 'failed'];
         if (terminal.includes(importRecord.status)) return;
@@ -245,24 +295,79 @@ export default function ImportWizard() {
         return () => clearInterval(interval);
     }, [importRecord, step]);
 
-    const goToStep2 = () => {
+    // Step 1 → 2: Submit Cloud token
+    const submitCloudToken = async () => {
+        setLoading(true);
+        setError(null);
+        setCloudTokenError('');
+        try {
+            await axios.post('/api/cloud/token', {
+                api_token: cloudApiToken,
+                organization_name: cloudOrgName || null,
+            });
+            setConnections((prev) =>
+                prev
+                    ? { ...prev, cloud: true }
+                    : { heroku: false, cloud: true },
+            );
+            setStep(2);
+        } catch (err: unknown) {
+            if (
+                axios.isAxiosError(err) &&
+                err.response?.status === 422 &&
+                err.response?.data?.errors?.api_token
+            ) {
+                const messages = err.response.data.errors.api_token;
+                setCloudTokenError(
+                    Array.isArray(messages) ? messages[0] : messages,
+                );
+            } else {
+                setError('Failed to save Cloud API token.');
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Step 2 → 3: Validate repo format
+    const goToStep3 = () => {
         if (!githubRepo.match(/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/)) {
             setError('Repository must be in "owner/repo" format.');
             return;
         }
         setError(null);
-        setStep(2);
+        setStep(3);
+    };
+
+    // Step 3 → 4: Confirm Heroku connected, fetch apps
+    const goToStep4 = () => {
+        setError(null);
+        setStep(4);
         fetchApps();
     };
 
-    const goToStep3 = () => {
+    // Step 4 → 5: Validate selection, fetch app details
+    const goToStep5 = () => {
         if (!selectedAppId) {
             setError('Please select a Heroku app.');
             return;
         }
         setError(null);
         fetchAppDetails(selectedAppId);
-        setStep(3);
+        setStep(5);
+    };
+
+    // Refresh Heroku connection status manually
+    const refreshHerokuStatus = async () => {
+        setRefreshingHeroku(true);
+        try {
+            const { data } = await axios.get('/api/connections');
+            setConnections(data);
+        } catch {
+            // ignore
+        } finally {
+            setRefreshingHeroku(false);
+        }
     };
 
     return (
@@ -275,180 +380,179 @@ export default function ImportWizard() {
                     description="Migrate your Heroku app to Laravel Cloud"
                 />
 
-                {connections === null ? (
+                {connectionsLoading ? (
                     <div className="flex items-center justify-center py-12">
                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                     </div>
-                ) : !connections.cloud ? (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Cloud className="h-5 w-5" />
-                                Connect Laravel Cloud first
-                            </CardTitle>
-                            <CardDescription>
-                                We need your Laravel Cloud API token to create
-                                the app, look up repositories, and run the
-                                migration. Add it in Settings → Integrations,
-                                then return here.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Button asChild>
-                                <a href="/settings/integrations">
-                                    Open Integrations
-                                    <ArrowRight className="ml-1.5 h-4 w-4" />
-                                </a>
-                            </Button>
-                        </CardContent>
-                    </Card>
                 ) : (
                     <>
-                {/* Step indicator */}
-                <div className="mb-8 flex items-center gap-2">
-                    {[1, 2, 3, 4].map((s) => (
-                        <div key={s} className="flex items-center gap-2">
-                            <div
-                                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors ${
-                                    s === step
-                                        ? 'bg-primary text-primary-foreground'
-                                        : s < step
-                                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                                          : 'bg-muted text-muted-foreground'
-                                }`}
-                            >
-                                {s < step ? (
-                                    <CheckCircle2 className="h-4 w-4" />
-                                ) : (
-                                    s
-                                )}
-                            </div>
-                            {s < 4 && (
-                                <div
-                                    className={`h-px w-8 ${s < step ? 'bg-green-300 dark:bg-green-700' : 'bg-border'}`}
-                                />
-                            )}
-                        </div>
-                    ))}
-                    <span className="ml-3 text-sm text-muted-foreground">
-                        {step === 1 && 'GitHub Repository'}
-                        {step === 2 && 'Select Heroku App'}
-                        {step === 3 && 'Review & Deploy'}
-                        {step === 4 && 'Deploy & Migrate'}
-                    </span>
-                </div>
-
-                {error && (
-                    <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
-                        <div className="flex flex-col gap-2">
-                            <div className="flex items-start gap-2">
-                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                                <span>{error}</span>
-                            </div>
-                            {error.includes('Heroku account') && (
-                                <a
-                                    href="/heroku/redirect"
-                                    className="inline-flex w-fit items-center rounded border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
-                                >
-                                    Connect Heroku account
-                                </a>
-                            )}
-                        </div>
-                    </div>
-                )}
-
-                {/* Step 1: GitHub Repository */}
-                {step === 1 && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Rocket className="h-5 w-5" />
-                                GitHub Repository
-                            </CardTitle>
-                            <CardDescription>
-                                Laravel Cloud deploys from GitHub. Your Heroku
-                                app's code must already be in this repository.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2">
-                                <Label htmlFor="github_repo">
-                                    Repository (owner/repo)
-                                </Label>
-                                <Input
-                                    id="github_repo"
-                                    value={githubRepo}
-                                    onChange={(e) =>
-                                        setGithubRepo(e.target.value)
-                                    }
-                                    placeholder="my-org/my-laravel-app"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    The repository must be accessible from your
-                                    Laravel Cloud organization.
-                                </p>
-                            </div>
-
-                            <div className="flex justify-end">
-                                <Button
-                                    onClick={goToStep2}
-                                    disabled={!githubRepo}
-                                >
-                                    Continue
-                                    <ArrowRight className="ml-1.5 h-4 w-4" />
-                                </Button>
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Step 2: Select Heroku App */}
-                {step === 2 && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Container className="h-5 w-5" />
-                                Select Heroku App
-                            </CardTitle>
-                            <CardDescription>
-                                Choose the Heroku app you want to migrate.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {loading ? (
-                                <div className="flex items-center justify-center py-8">
-                                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                                    <span className="ml-2 text-sm text-muted-foreground">
-                                        Loading your Heroku apps...
-                                    </span>
+                        {/* Step indicator */}
+                        <div className="mb-8 flex items-center gap-1.5">
+                            {Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1).map((s) => (
+                                <div key={s} className="flex items-center gap-1.5">
+                                    <div
+                                        className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium transition-colors ${
+                                            s === step
+                                                ? 'bg-primary text-primary-foreground'
+                                                : s < step
+                                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                                  : 'bg-muted text-muted-foreground'
+                                        }`}
+                                    >
+                                        {s < step ? (
+                                            <CheckCircle2 className="h-3.5 w-3.5" />
+                                        ) : (
+                                            s
+                                        )}
+                                    </div>
+                                    {s < TOTAL_STEPS && (
+                                        <div
+                                            className={`h-px w-5 ${s < step ? 'bg-green-300 dark:bg-green-700' : 'bg-border'}`}
+                                        />
+                                    )}
                                 </div>
-                            ) : (
-                                <>
-                                    <div className="grid gap-2">
-                                        <Label>Heroku App</Label>
-                                        <Select
-                                            value={selectedAppId}
-                                            onValueChange={setSelectedAppId}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select an app" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {herokuApps.map((app) => (
-                                                    <SelectItem
-                                                        key={app.id}
-                                                        value={app.id}
+                            ))}
+                            <span className="ml-2 text-sm text-muted-foreground">
+                                {STEP_LABELS[step]}
+                            </span>
+                        </div>
+
+                        {error && (
+                            <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
+                                <div className="flex items-start gap-2">
+                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                    <span>{error}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Step 1: Cloud API Token */}
+                        {step === 1 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Key className="h-5 w-5" />
+                                        Laravel Cloud API Token
+                                    </CardTitle>
+                                    <CardDescription>
+                                        We need your Cloud API token to create
+                                        the app, set environment variables, and
+                                        trigger deployments.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    {connections?.cloud ? (
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+                                                <CheckCircle2 className="h-4 w-4" />
+                                                Laravel Cloud is connected.
+                                            </div>
+                                            <div className="flex justify-end">
+                                                <Button onClick={() => setStep(2)}>
+                                                    Continue
+                                                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="cloud_api_token">
+                                                    API Token
+                                                </Label>
+                                                <Input
+                                                    id="cloud_api_token"
+                                                    type="password"
+                                                    value={cloudApiToken}
+                                                    onChange={(e) =>
+                                                        setCloudApiToken(e.target.value)
+                                                    }
+                                                    placeholder="Your Laravel Cloud API token"
+                                                />
+                                                {cloudTokenError && (
+                                                    <p className="text-sm text-red-600 dark:text-red-400">
+                                                        {cloudTokenError}
+                                                    </p>
+                                                )}
+                                                <p className="text-xs text-muted-foreground">
+                                                    Generate a token from your{' '}
+                                                    <a
+                                                        href="https://cloud.laravel.com"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="underline underline-offset-2 hover:text-foreground"
                                                     >
-                                                        <span className="font-medium">
-                                                            {app.name}
-                                                        </span>
-                                                        <span className="ml-2 text-muted-foreground">
-                                                            ({app.region?.name})
-                                                        </span>
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                                        Cloud organization settings
+                                                    </a>
+                                                    .
+                                                </p>
+                                            </div>
+
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="cloud_org_name">
+                                                    Organization name{' '}
+                                                    <span className="text-muted-foreground">
+                                                        (optional)
+                                                    </span>
+                                                </Label>
+                                                <Input
+                                                    id="cloud_org_name"
+                                                    value={cloudOrgName}
+                                                    onChange={(e) =>
+                                                        setCloudOrgName(e.target.value)
+                                                    }
+                                                    placeholder="My Organization"
+                                                />
+                                            </div>
+
+                                            <div className="flex justify-end">
+                                                <Button
+                                                    onClick={submitCloudToken}
+                                                    disabled={!cloudApiToken || loading}
+                                                >
+                                                    {loading ? (
+                                                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                                    ) : null}
+                                                    Save & continue
+                                                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Step 2: GitHub Repository */}
+                        {step === 2 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Rocket className="h-5 w-5" />
+                                        GitHub Repository
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Laravel Cloud deploys from GitHub. Your Heroku
+                                        app's code must already be in this repository.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="github_repo">
+                                            Repository (owner/repo)
+                                        </Label>
+                                        <Input
+                                            id="github_repo"
+                                            value={githubRepo}
+                                            onChange={(e) =>
+                                                setGithubRepo(e.target.value)
+                                            }
+                                            placeholder="my-org/my-laravel-app"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            The repository must be accessible from your
+                                            Laravel Cloud organization.
+                                        </p>
                                     </div>
 
                                     <div className="flex justify-between">
@@ -461,460 +565,607 @@ export default function ImportWizard() {
                                         </Button>
                                         <Button
                                             onClick={goToStep3}
-                                            disabled={!selectedAppId}
+                                            disabled={!githubRepo}
                                         >
                                             Continue
                                             <ArrowRight className="ml-1.5 h-4 w-4" />
                                         </Button>
                                     </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Step 3: Review Mapping */}
-                {step === 3 && (
-                    <div className="space-y-6">
-                        {loading || !appDetails ? (
-                            <Card>
-                                <CardContent className="py-8">
-                                    <div className="flex items-center justify-center">
-                                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                                        <span className="ml-2 text-sm text-muted-foreground">
-                                            Fetching app configuration...
-                                        </span>
-                                    </div>
                                 </CardContent>
                             </Card>
-                        ) : (
-                            <>
-                                <Card>
-                                    <CardHeader>
-                                        <CardTitle className="flex items-center gap-2">
-                                            <Cloud className="h-5 w-5" />
-                                            Migration summary
-                                        </CardTitle>
-                                        <CardDescription>
-                                            Phase 1 will deploy your app on
-                                            Laravel Cloud using your current
-                                            Heroku database. No downtime.
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <dl className="space-y-4">
-                                            <div className="flex items-start gap-3">
-                                                <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                <div>
-                                                    <dt className="text-sm font-medium">
-                                                        Application
-                                                    </dt>
-                                                    <dd className="text-sm text-muted-foreground">
-                                                        {appDetails.app.name}{' '}
-                                                        &rarr; {githubRepo}
-                                                    </dd>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-start gap-3">
-                                                <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                <div>
-                                                    <dt className="text-sm font-medium">
-                                                        Region
-                                                    </dt>
-                                                    <dd className="text-sm text-muted-foreground">
-                                                        {appDetails.app.region
-                                                            ?.name || 'us'}{' '}
-                                                        &rarr;{' '}
-                                                        {REGION_MAP[
-                                                            appDetails.app
-                                                                .region
-                                                                ?.name || 'us'
-                                                        ] || 'us-east-2'}
-                                                    </dd>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-start gap-3">
-                                                <Container className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                <div>
-                                                    <dt className="text-sm font-medium">
-                                                        Compute
-                                                    </dt>
-                                                    <dd className="space-y-1">
-                                                        {appDetails.formation.map(
-                                                            (f) => (
-                                                                <div
-                                                                    key={f.type}
-                                                                    className="text-sm text-muted-foreground"
-                                                                >
-                                                                    {f.type} (
-                                                                    {f.size}{' '}
-                                                                    &times;
-                                                                    {f.quantity})
-                                                                    &rarr;{' '}
-                                                                    {DYNO_SIZE_MAP[
-                                                                        f.size?.toLowerCase()
-                                                                    ] ||
-                                                                        'flex.g-1vcpu-512mb'}
-                                                                </div>
-                                                            ),
-                                                        )}
-                                                    </dd>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-start gap-3">
-                                                <Database className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                <div>
-                                                    <dt className="text-sm font-medium">
-                                                        Environment variables
-                                                    </dt>
-                                                    <dd className="text-sm text-muted-foreground">
-                                                        {
-                                                            Object.keys(
-                                                                appDetails.config_vars,
-                                                            ).length
-                                                        }{' '}
-                                                        variables (including
-                                                        DATABASE_URL for Phase
-                                                        1)
-                                                    </dd>
-                                                </div>
-                                            </div>
-
-                                            {appDetails.domains.filter(
-                                                (d) => d.kind === 'custom',
-                                            ).length > 0 && (
-                                                <div className="flex items-start gap-3">
-                                                    <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                    <div>
-                                                        <dt className="text-sm font-medium">
-                                                            Custom domains
-                                                        </dt>
-                                                        <dd className="text-sm text-muted-foreground">
-                                                            {appDetails.domains
-                                                                .filter(
-                                                                    (d) =>
-                                                                        d.kind ===
-                                                                        'custom',
-                                                                )
-                                                                .map(
-                                                                    (d) =>
-                                                                        d.hostname,
-                                                                )
-                                                                .join(', ')}
-                                                        </dd>
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {appDetails.addons.length > 0 && (
-                                                <div className="flex items-start gap-3">
-                                                    <Database className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                                                    <div>
-                                                        <dt className="text-sm font-medium">
-                                                            Add-ons
-                                                        </dt>
-                                                        <dd className="space-y-1">
-                                                            {appDetails.addons.map(
-                                                                (a, i) => (
-                                                                    <div
-                                                                        key={i}
-                                                                        className="text-sm text-muted-foreground"
-                                                                    >
-                                                                        {
-                                                                            a
-                                                                                .addon_service
-                                                                                .name
-                                                                        }{' '}
-                                                                        (
-                                                                        {
-                                                                            a
-                                                                                .plan
-                                                                                .name
-                                                                        }
-                                                                        )
-                                                                    </div>
-                                                                ),
-                                                            )}
-                                                        </dd>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </dl>
-                                    </CardContent>
-                                </Card>
-
-                                <div className="flex justify-between">
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => setStep(2)}
-                                    >
-                                        <ArrowLeft className="mr-1.5 h-4 w-4" />
-                                        Back
-                                    </Button>
-                                    <Button
-                                        onClick={startImport}
-                                        disabled={loading}
-                                    >
-                                        {loading ? (
-                                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                                        ) : (
-                                            <Rocket className="mr-1.5 h-4 w-4" />
-                                        )}
-                                        Start Phase 1
-                                    </Button>
-                                </div>
-                            </>
                         )}
-                    </div>
-                )}
 
-                {/* Step 4: Progress */}
-                {step === 4 && importRecord && (
-                    <div className="space-y-6">
-                        {/* Phase 1 card */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    {importRecord.status === 'failed' &&
-                                    !importRecord.phase2_log?.length ? (
-                                        <XCircle className="h-5 w-5 text-red-500" />
-                                    ) : [
-                                          'phase1_done',
-                                          'phase2_running',
-                                          'phase2_done',
-                                      ].includes(importRecord.status) ? (
-                                        <CheckCircle2 className="h-5 w-5 text-green-500" />
-                                    ) : importRecord.status === 'failed' ? (
-                                        <XCircle className="h-5 w-5 text-red-500" />
-                                    ) : (
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                    )}
-                                    Phase 1: Deploy to Laravel Cloud
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                {importRecord.status === 'pending' &&
-                                    (!importRecord.phase1_log ||
-                                        importRecord.phase1_log.length === 0) && (
-                                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
-                                            <div className="flex items-start gap-2">
-                                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                                                <div>
-                                                    <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                                                        Phase 1 is queued
-                                                    </h4>
-                                                    <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                                                        Nothing is happening
-                                                        because no queue worker
-                                                        is running. On Laravel
-                                                        Cloud: add a background
-                                                        process (e.g. in your
-                                                        app cluster) that runs{' '}
-                                                        <code className="rounded bg-amber-100 px-1 dark:bg-amber-900/40">
-                                                            php artisan
-                                                            queue:work
-                                                        </code>
-                                                        . Then Phase 1 will
-                                                        run automatically.
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                {importRecord.phase1_log &&
-                                    importRecord.phase1_log.length > 0 && (
-                                        <div className="rounded-lg border bg-neutral-950 p-4">
-                                            <div className="space-y-1 font-mono text-xs text-neutral-300">
-                                                {importRecord.phase1_log.map(
-                                                    (entry, i) => (
-                                                        <div
-                                                            key={i}
-                                                            className={
-                                                                entry.includes(
-                                                                    'failed',
-                                                                )
-                                                                    ? 'text-red-400'
-                                                                    : entry.includes(
-                                                                            'complete',
-                                                                          ) ||
-                                                                        entry.includes(
-                                                                            'successfully',
-                                                                        )
-                                                                      ? 'text-green-400'
-                                                                      : ''
-                                                            }
-                                                        >
-                                                            {entry}
-                                                        </div>
-                                                    ),
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                            </CardContent>
-                        </Card>
-
-                        {/* Phase 2 section */}
-                        {importRecord.status === 'phase1_done' && (
+                        {/* Step 3: Heroku Connect */}
+                        {step === 3 && (
                             <Card>
                                 <CardHeader>
                                     <CardTitle className="flex items-center gap-2">
-                                        <Database className="h-5 w-5" />
-                                        Phase 2: Migrate Database
+                                        <Cloud className="h-5 w-5" />
+                                        Connect Heroku
                                     </CardTitle>
                                     <CardDescription>
-                                        Provision Serverless Postgres on Laravel
-                                        Cloud and migrate your Heroku database.
+                                        We need read access to your Heroku account
+                                        so we can pull your app configuration,
+                                        add-ons, and environment variables.
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    {connections?.heroku ? (
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+                                                <CheckCircle2 className="h-4 w-4" />
+                                                Heroku is connected.
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => setStep(2)}
+                                                >
+                                                    <ArrowLeft className="mr-1.5 h-4 w-4" />
+                                                    Back
+                                                </Button>
+                                                <Button onClick={goToStep4}>
+                                                    Continue
+                                                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <p className="text-sm text-muted-foreground">
+                                                Click the button below to authorize
+                                                with Heroku. You'll be redirected
+                                                back here automatically.
+                                            </p>
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <Button asChild>
+                                                    <a href="/heroku/redirect">
+                                                        <ExternalLink className="mr-1.5 h-4 w-4" />
+                                                        Connect Heroku
+                                                    </a>
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={refreshHerokuStatus}
+                                                    disabled={refreshingHeroku}
+                                                >
+                                                    {refreshingHeroku ? (
+                                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                                    ) : (
+                                                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                                                    )}
+                                                    Refresh status
+                                                </Button>
+                                            </div>
+                                            <div className="flex justify-between pt-2">
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => setStep(2)}
+                                                >
+                                                    <ArrowLeft className="mr-1.5 h-4 w-4" />
+                                                    Back
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Step 4: Select Heroku App */}
+                        {step === 4 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Container className="h-5 w-5" />
+                                        Select Heroku App
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Choose the Heroku app you want to migrate.
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-4">
-                                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
-                                        <div className="flex items-start gap-2">
-                                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                                            <div>
-                                                <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                                                    Downtime required
-                                                </h4>
-                                                <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                                                    Any new data written to your
-                                                    Heroku app during this
-                                                    migration will not be moved
-                                                    over. Consider putting your
-                                                    Heroku app in maintenance
-                                                    mode or read-only before
-                                                    proceeding.
-                                                </p>
-                                            </div>
+                                    {loading ? (
+                                        <div className="flex items-center justify-center py-8">
+                                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                            <span className="ml-2 text-sm text-muted-foreground">
+                                                Loading your Heroku apps...
+                                            </span>
                                         </div>
-                                    </div>
-                                    <Button
-                                        onClick={startPhase2}
-                                        disabled={loading}
-                                    >
-                                        {loading ? (
-                                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                                        ) : (
-                                            <Database className="mr-1.5 h-4 w-4" />
-                                        )}
-                                        Start Phase 2
-                                    </Button>
-                                </CardContent>
-                            </Card>
-                        )}
-
-                        {/* Phase 2 progress */}
-                        {['phase2_running', 'phase2_done'].includes(
-                            importRecord.status,
-                        ) && (
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2">
-                                        {importRecord.status ===
-                                        'phase2_done' ? (
-                                            <CheckCircle2 className="h-5 w-5 text-green-500" />
-                                        ) : (
-                                            <Loader2 className="h-5 w-5 animate-spin" />
-                                        )}
-                                        Phase 2: Migrate Database
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    {importRecord.phase2_log &&
-                                        importRecord.phase2_log.length > 0 && (
-                                            <div className="rounded-lg border bg-neutral-950 p-4">
-                                                <div className="space-y-1 font-mono text-xs text-neutral-300">
-                                                    {importRecord.phase2_log.map(
-                                                        (entry, i) => (
-                                                            <div
-                                                                key={i}
-                                                                className={
-                                                                    entry.includes(
-                                                                        'failed',
-                                                                    )
-                                                                        ? 'text-red-400'
-                                                                        : entry.includes(
-                                                                                'complete',
-                                                                              ) ||
-                                                                            entry.includes(
-                                                                                'successfully',
-                                                                            )
-                                                                          ? 'text-green-400'
-                                                                          : ''
-                                                                }
+                                    ) : (
+                                        <>
+                                            <div className="grid gap-2">
+                                                <Label>Heroku App</Label>
+                                                <Select
+                                                    value={selectedAppId}
+                                                    onValueChange={setSelectedAppId}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select an app" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {herokuApps.map((app) => (
+                                                            <SelectItem
+                                                                key={app.id}
+                                                                value={app.id}
                                                             >
-                                                                {entry}
-                                                            </div>
-                                                        ),
-                                                    )}
-                                                </div>
+                                                                <span className="font-medium">
+                                                                    {app.name}
+                                                                </span>
+                                                                <span className="ml-2 text-muted-foreground">
+                                                                    ({app.region?.name})
+                                                                </span>
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
                                             </div>
-                                        )}
+
+                                            <div className="flex justify-between">
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => setStep(3)}
+                                                >
+                                                    <ArrowLeft className="mr-1.5 h-4 w-4" />
+                                                    Back
+                                                </Button>
+                                                <Button
+                                                    onClick={goToStep5}
+                                                    disabled={!selectedAppId}
+                                                >
+                                                    Continue
+                                                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </>
+                                    )}
                                 </CardContent>
                             </Card>
                         )}
 
-                        {/* Phase 2 failed */}
-                        {importRecord.status === 'failed' &&
-                            importRecord.phase2_log &&
-                            importRecord.phase2_log.length > 0 && (
+                        {/* Step 5: Review Mapping */}
+                        {step === 5 && (
+                            <div className="space-y-6">
+                                {loading || !appDetails ? (
+                                    <Card>
+                                        <CardContent className="py-8">
+                                            <div className="flex items-center justify-center">
+                                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                                <span className="ml-2 text-sm text-muted-foreground">
+                                                    Fetching app configuration...
+                                                </span>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                ) : (
+                                    <>
+                                        <Card>
+                                            <CardHeader>
+                                                <CardTitle className="flex items-center gap-2">
+                                                    <Cloud className="h-5 w-5" />
+                                                    Migration summary
+                                                </CardTitle>
+                                                <CardDescription>
+                                                    Phase 1 will deploy your app on
+                                                    Laravel Cloud using your current
+                                                    Heroku database. No downtime.
+                                                </CardDescription>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <dl className="space-y-4">
+                                                    <div className="flex items-start gap-3">
+                                                        <Server className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        <div>
+                                                            <dt className="text-sm font-medium">
+                                                                Application
+                                                            </dt>
+                                                            <dd className="text-sm text-muted-foreground">
+                                                                {appDetails.app.name}{' '}
+                                                                &rarr; {githubRepo}
+                                                            </dd>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-start gap-3">
+                                                        <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        <div>
+                                                            <dt className="text-sm font-medium">
+                                                                Region
+                                                            </dt>
+                                                            <dd className="text-sm text-muted-foreground">
+                                                                {appDetails.app.region
+                                                                    ?.name || 'us'}{' '}
+                                                                &rarr;{' '}
+                                                                {REGION_MAP[
+                                                                    appDetails.app
+                                                                        .region
+                                                                        ?.name || 'us'
+                                                                ] || 'us-east-2'}
+                                                            </dd>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-start gap-3">
+                                                        <Container className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        <div>
+                                                            <dt className="text-sm font-medium">
+                                                                Compute
+                                                            </dt>
+                                                            <dd className="space-y-1">
+                                                                {appDetails.formation.map(
+                                                                    (f) => (
+                                                                        <div
+                                                                            key={f.type}
+                                                                            className="text-sm text-muted-foreground"
+                                                                        >
+                                                                            {f.type} (
+                                                                            {f.size}{' '}
+                                                                            &times;
+                                                                            {f.quantity})
+                                                                            &rarr;{' '}
+                                                                            {DYNO_SIZE_MAP[
+                                                                                f.size?.toLowerCase()
+                                                                            ] ||
+                                                                                'flex.g-1vcpu-512mb'}
+                                                                        </div>
+                                                                    ),
+                                                                )}
+                                                            </dd>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-start gap-3">
+                                                        <Database className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        <div>
+                                                            <dt className="text-sm font-medium">
+                                                                Environment variables
+                                                            </dt>
+                                                            <dd className="text-sm text-muted-foreground">
+                                                                {
+                                                                    Object.keys(
+                                                                        appDetails.config_vars,
+                                                                    ).length
+                                                                }{' '}
+                                                                variables (including
+                                                                DATABASE_URL for Phase
+                                                                1)
+                                                            </dd>
+                                                        </div>
+                                                    </div>
+
+                                                    {appDetails.domains.filter(
+                                                        (d) => d.kind === 'custom',
+                                                    ).length > 0 && (
+                                                        <div className="flex items-start gap-3">
+                                                            <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                            <div>
+                                                                <dt className="text-sm font-medium">
+                                                                    Custom domains
+                                                                </dt>
+                                                                <dd className="text-sm text-muted-foreground">
+                                                                    {appDetails.domains
+                                                                        .filter(
+                                                                            (d) =>
+                                                                                d.kind ===
+                                                                                'custom',
+                                                                        )
+                                                                        .map(
+                                                                            (d) =>
+                                                                                d.hostname,
+                                                                        )
+                                                                        .join(', ')}
+                                                                </dd>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {appDetails.addons.length > 0 && (
+                                                        <div className="flex items-start gap-3">
+                                                            <Database className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                                            <div>
+                                                                <dt className="text-sm font-medium">
+                                                                    Add-ons
+                                                                </dt>
+                                                                <dd className="space-y-1">
+                                                                    {appDetails.addons.map(
+                                                                        (a, i) => (
+                                                                            <div
+                                                                                key={i}
+                                                                                className="text-sm text-muted-foreground"
+                                                                            >
+                                                                                {
+                                                                                    a
+                                                                                        .addon_service
+                                                                                        .name
+                                                                                }{' '}
+                                                                                (
+                                                                                {
+                                                                                    a
+                                                                                        .plan
+                                                                                        .name
+                                                                                }
+                                                                                )
+                                                                            </div>
+                                                                        ),
+                                                                    )}
+                                                                </dd>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </dl>
+                                            </CardContent>
+                                        </Card>
+
+                                        <div className="flex justify-between">
+                                            <Button
+                                                variant="outline"
+                                                onClick={() => setStep(4)}
+                                            >
+                                                <ArrowLeft className="mr-1.5 h-4 w-4" />
+                                                Back
+                                            </Button>
+                                            <Button
+                                                onClick={startImport}
+                                                disabled={loading}
+                                            >
+                                                {loading ? (
+                                                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <Rocket className="mr-1.5 h-4 w-4" />
+                                                )}
+                                                Start Phase 1
+                                            </Button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Step 6: Progress */}
+                        {step === 6 && importRecord && (
+                            <div className="space-y-6">
+                                {/* Phase 1 card */}
                                 <Card>
                                     <CardHeader>
                                         <CardTitle className="flex items-center gap-2">
-                                            <XCircle className="h-5 w-5 text-red-500" />
-                                            Phase 2 Failed
+                                            {importRecord.status === 'failed' &&
+                                            !importRecord.phase2_log?.length ? (
+                                                <XCircle className="h-5 w-5 text-red-500" />
+                                            ) : [
+                                                  'phase1_done',
+                                                  'phase2_running',
+                                                  'phase2_done',
+                                              ].includes(importRecord.status) ? (
+                                                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                            ) : importRecord.status === 'failed' ? (
+                                                <XCircle className="h-5 w-5 text-red-500" />
+                                            ) : (
+                                                <Loader2 className="h-5 w-5 animate-spin" />
+                                            )}
+                                            Phase 1: Deploy to Laravel Cloud
                                         </CardTitle>
                                     </CardHeader>
-                                    <CardContent>
-                                        <div className="rounded-lg border bg-neutral-950 p-4">
-                                            <div className="space-y-1 font-mono text-xs text-neutral-300">
-                                                {importRecord.phase2_log.map(
-                                                    (entry, i) => (
-                                                        <div
-                                                            key={i}
-                                                            className={
-                                                                entry.includes(
-                                                                    'failed',
-                                                                )
-                                                                    ? 'text-red-400'
-                                                                    : ''
-                                                            }
-                                                        >
-                                                            {entry}
+                                    <CardContent className="space-y-4">
+                                        {importRecord.status === 'pending' &&
+                                            (!importRecord.phase1_log ||
+                                                importRecord.phase1_log.length === 0) && (
+                                                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
+                                                    <div className="flex items-start gap-2">
+                                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                                        <div>
+                                                            <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                                                Phase 1 is queued
+                                                            </h4>
+                                                            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                                                                Nothing is happening
+                                                                because no queue worker
+                                                                is running. On Laravel
+                                                                Cloud: add a background
+                                                                process (e.g. in your
+                                                                app cluster) that runs{' '}
+                                                                <code className="rounded bg-amber-100 px-1 dark:bg-amber-900/40">
+                                                                    php artisan
+                                                                    queue:work
+                                                                </code>
+                                                                . Then Phase 1 will
+                                                                run automatically.
+                                                            </p>
                                                         </div>
-                                                    ),
-                                                )}
-                                            </div>
-                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        {importRecord.phase1_log &&
+                                            importRecord.phase1_log.length > 0 && (
+                                                <div className="rounded-lg border bg-neutral-950 p-4">
+                                                    <div className="space-y-1 font-mono text-xs text-neutral-300">
+                                                        {importRecord.phase1_log.map(
+                                                            (entry, i) => (
+                                                                <div
+                                                                    key={i}
+                                                                    className={
+                                                                        entry.includes(
+                                                                            'failed',
+                                                                        )
+                                                                            ? 'text-red-400'
+                                                                            : entry.includes(
+                                                                                    'complete',
+                                                                                  ) ||
+                                                                                entry.includes(
+                                                                                    'successfully',
+                                                                                )
+                                                                              ? 'text-green-400'
+                                                                              : ''
+                                                                    }
+                                                                >
+                                                                    {entry}
+                                                                </div>
+                                                            ),
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
                                     </CardContent>
                                 </Card>
-                            )}
 
-                        {/* Error message */}
-                        {importRecord.error_message && (
-                            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
-                                {importRecord.error_message}
+                                {/* Phase 2 section */}
+                                {importRecord.status === 'phase1_done' && (
+                                    <Card>
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                <Database className="h-5 w-5" />
+                                                Phase 2: Migrate Database
+                                            </CardTitle>
+                                            <CardDescription>
+                                                Provision Serverless Postgres on Laravel
+                                                Cloud and migrate your Heroku database.
+                                            </CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/30 dark:bg-amber-950/20">
+                                                <div className="flex items-start gap-2">
+                                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                                    <div>
+                                                        <h4 className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                                            Downtime required
+                                                        </h4>
+                                                        <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                                                            Any new data written to your
+                                                            Heroku app during this
+                                                            migration will not be moved
+                                                            over. Consider putting your
+                                                            Heroku app in maintenance
+                                                            mode or read-only before
+                                                            proceeding.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <Button
+                                                onClick={startPhase2}
+                                                disabled={loading}
+                                            >
+                                                {loading ? (
+                                                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <Database className="mr-1.5 h-4 w-4" />
+                                                )}
+                                                Start Phase 2
+                                            </Button>
+                                        </CardContent>
+                                    </Card>
+                                )}
+
+                                {/* Phase 2 progress */}
+                                {['phase2_running', 'phase2_done'].includes(
+                                    importRecord.status,
+                                ) && (
+                                    <Card>
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                {importRecord.status ===
+                                                'phase2_done' ? (
+                                                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                                ) : (
+                                                    <Loader2 className="h-5 w-5 animate-spin" />
+                                                )}
+                                                Phase 2: Migrate Database
+                                            </CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            {importRecord.phase2_log &&
+                                                importRecord.phase2_log.length > 0 && (
+                                                    <div className="rounded-lg border bg-neutral-950 p-4">
+                                                        <div className="space-y-1 font-mono text-xs text-neutral-300">
+                                                            {importRecord.phase2_log.map(
+                                                                (entry, i) => (
+                                                                    <div
+                                                                        key={i}
+                                                                        className={
+                                                                            entry.includes(
+                                                                                'failed',
+                                                                            )
+                                                                                ? 'text-red-400'
+                                                                                : entry.includes(
+                                                                                        'complete',
+                                                                                      ) ||
+                                                                                    entry.includes(
+                                                                                        'successfully',
+                                                                                    )
+                                                                                  ? 'text-green-400'
+                                                                                  : ''
+                                                                        }
+                                                                    >
+                                                                        {entry}
+                                                                    </div>
+                                                                ),
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                        </CardContent>
+                                    </Card>
+                                )}
+
+                                {/* Phase 2 failed */}
+                                {importRecord.status === 'failed' &&
+                                    importRecord.phase2_log &&
+                                    importRecord.phase2_log.length > 0 && (
+                                        <Card>
+                                            <CardHeader>
+                                                <CardTitle className="flex items-center gap-2">
+                                                    <XCircle className="h-5 w-5 text-red-500" />
+                                                    Phase 2 Failed
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <div className="rounded-lg border bg-neutral-950 p-4">
+                                                    <div className="space-y-1 font-mono text-xs text-neutral-300">
+                                                        {importRecord.phase2_log.map(
+                                                            (entry, i) => (
+                                                                <div
+                                                                    key={i}
+                                                                    className={
+                                                                        entry.includes(
+                                                                            'failed',
+                                                                        )
+                                                                            ? 'text-red-400'
+                                                                            : ''
+                                                                    }
+                                                                >
+                                                                    {entry}
+                                                                </div>
+                                                            ),
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    )}
+
+                                {/* Error message */}
+                                {importRecord.error_message && (
+                                    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800/30 dark:bg-red-950/20 dark:text-red-300">
+                                        {importRecord.error_message}
+                                    </div>
+                                )}
+
+                                {/* Completion message */}
+                                {importRecord.status === 'phase2_done' && (
+                                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800/30 dark:bg-green-950/20">
+                                        <h4 className="text-sm font-medium text-green-900 dark:text-green-200">
+                                            Migration complete
+                                        </h4>
+                                        <p className="mt-1 text-sm text-green-700 dark:text-green-300">
+                                            Your app is fully migrated to Laravel Cloud
+                                            with its own Serverless Postgres database.
+                                            You can now safely decommission your Heroku
+                                            app.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         )}
-
-                        {/* Completion message */}
-                        {importRecord.status === 'phase2_done' && (
-                            <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800/30 dark:bg-green-950/20">
-                                <h4 className="text-sm font-medium text-green-900 dark:text-green-200">
-                                    Migration complete
-                                </h4>
-                                <p className="mt-1 text-sm text-green-700 dark:text-green-300">
-                                    Your app is fully migrated to Laravel Cloud
-                                    with its own Serverless Postgres database.
-                                    You can now safely decommission your Heroku
-                                    app.
-                                </p>
-                            </div>
-                        )}
-                    </div>
-                )}
                     </>
                 )}
             </div>

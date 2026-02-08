@@ -37,7 +37,7 @@ test('heroku callback exchanges code for tokens', function () {
         ->withSession(['_token' => 'test-state'])
         ->get(route('heroku.callback', ['code' => 'test-code', 'state' => 'test-state']));
 
-    $response->assertRedirect(route('integrations.edit'));
+    $response->assertRedirect('/import');
     expect($user->fresh()->herokuToken)->not->toBeNull();
 });
 

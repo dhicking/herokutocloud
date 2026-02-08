@@ -1,8 +1,8 @@
-import { Head, router, useForm } from '@inertiajs/react';
-import { CheckCircle2, ExternalLink, Unplug, XCircle } from 'lucide-react';
-import { type FormEventHandler } from 'react';
+import { Head, router } from '@inertiajs/react';
+import axios from 'axios';
+import { CheckCircle2, ExternalLink, Loader2, Unplug, XCircle } from 'lucide-react';
+import { type FormEventHandler, useState } from 'react';
 import Heading from '@/components/heading';
-import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -38,20 +38,37 @@ export default function Integrations({
     cloudOrganizationName,
     status,
 }: Props) {
-    const cloudForm = useForm({
-        api_token: '',
-        organization_name: '',
-    });
+    const [cloudApiToken, setCloudApiToken] = useState('');
+    const [cloudOrgName, setCloudOrgName] = useState('');
+    const [cloudSaving, setCloudSaving] = useState(false);
+    const [cloudError, setCloudError] = useState('');
 
-    const submitCloudToken: FormEventHandler = (e) => {
+    const submitCloudToken: FormEventHandler = async (e) => {
         e.preventDefault();
-        cloudForm.post('/api/cloud/token', {
-            preserveScroll: true,
-            onSuccess: () => {
-                cloudForm.reset();
-                router.reload();
-            },
-        });
+        setCloudSaving(true);
+        setCloudError('');
+        try {
+            await axios.post('/api/cloud/token', {
+                api_token: cloudApiToken,
+                organization_name: cloudOrgName || null,
+            });
+            setCloudApiToken('');
+            setCloudOrgName('');
+            router.reload();
+        } catch (err: unknown) {
+            if (
+                axios.isAxiosError(err) &&
+                err.response?.status === 422 &&
+                err.response?.data?.errors?.api_token
+            ) {
+                const messages = err.response.data.errors.api_token;
+                setCloudError(Array.isArray(messages) ? messages[0] : messages);
+            } else {
+                setCloudError('Failed to save Cloud API token.');
+            }
+        } finally {
+            setCloudSaving(false);
+        }
     };
 
     const disconnectHeroku = () => {
@@ -133,18 +150,17 @@ export default function Integrations({
                                         <Input
                                             id="api_token"
                                             type="password"
-                                            value={cloudForm.data.api_token}
+                                            value={cloudApiToken}
                                             onChange={(e) =>
-                                                cloudForm.setData(
-                                                    'api_token',
-                                                    e.target.value,
-                                                )
+                                                setCloudApiToken(e.target.value)
                                             }
                                             placeholder="Your Laravel Cloud API token"
                                         />
-                                        <InputError
-                                            message={cloudForm.errors.api_token}
-                                        />
+                                        {cloudError && (
+                                            <p className="text-sm text-red-600 dark:text-red-400">
+                                                {cloudError}
+                                            </p>
+                                        )}
                                         <p className="text-xs text-muted-foreground">
                                             Generate a token from your{' '}
                                             <a
@@ -168,14 +184,9 @@ export default function Integrations({
                                         </Label>
                                         <Input
                                             id="organization_name"
-                                            value={
-                                                cloudForm.data.organization_name
-                                            }
+                                            value={cloudOrgName}
                                             onChange={(e) =>
-                                                cloudForm.setData(
-                                                    'organization_name',
-                                                    e.target.value,
-                                                )
+                                                setCloudOrgName(e.target.value)
                                             }
                                             placeholder="My Organization"
                                         />
@@ -184,8 +195,11 @@ export default function Integrations({
                                     <Button
                                         type="submit"
                                         size="sm"
-                                        disabled={cloudForm.processing}
+                                        disabled={cloudSaving || !cloudApiToken}
                                     >
+                                        {cloudSaving && (
+                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                        )}
                                         Save token
                                     </Button>
                                 </form>
